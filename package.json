@@ -1,0 +1,17 @@
+{
+    "name": "application-name"
+  , "version": "0.0.1"
+  , "dependencies": {
+      "express": "3.x.x"
+    , "jade": ">= 0.0.1"
+    , "socket.io": ">=0.9.0"
+    , "uglify-js": "*"
+    , "zeparser": "*"
+    , "socket.io-client": "*"
+  },
+  "engines": {
+    "node": "0.10.x",
+    "npm": "1.1.x"
+  }
+}
+

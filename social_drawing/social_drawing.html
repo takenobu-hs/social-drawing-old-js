@@ -1,0 +1,705 @@
+﻿<!DOCTYPE html>
+<html>
+<!-- (c) 2012 Takenobu Tani -->
+<!-- html manifest="social_drawing.manifest" -->
+<meta name="viewport" content="width=1000, user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<head>
+<title> social drawing (realtime shared drawing) </title>
+
+<style type="text/css">
+body {
+  margin:0;
+  padding: 0;
+  overflow: hidden;
+
+  background-color: #fff;
+  background: -webkit-linear-gradient(top, #eeeeee, #ffffff 70%, #eeeeee);
+  background: linear-gradient(top, #eeeeee, #ffffff 70%, #eeeeee);
+
+  color: #777;
+  font-family: "Helvetica Neue",Helvetica,Arial,sans-serif;
+  font-size: 14px;
+  text-shadow: 0 1px 0 white;
+}
+
+#canvas {
+  background-color: #fff;
+}
+
+#control_area, #connection_area {
+  padding: 4px 10px;
+  width: 980px;
+
+  -webkit-border-radius: 4px;
+  border-radius: 4px;
+
+  -webkit-box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+
+  background-image: -webkit-linear-gradient(#fafafa, #f2f2f2);
+  background-image: linear-gradient(top, #fafafa, #f2f2f2);
+}
+
+select {
+  color: #222;
+  font-family: "Helvetica Neue",Helvetica,Arial,sans-serif;
+  font-size: 13px;
+  text-shadow: 0 1px 0 white;
+  margin-right: 10px;
+
+}
+
+#social_draw_area {
+  padding: 4px 10px;
+  color: #ccc;
+  font-size: 28px;
+}
+
+#con_area {
+  padding-left: 20px;
+}
+
+#con_num {
+  color: #733;
+  font-size: 16px;
+}
+
+/* */
+.debug {
+  display: block;
+  display: none;
+}
+
+#adm_fade_area {
+  position:absolute;
+  left: 600px;
+  color: #777;
+  visibility: hidden;
+}
+
+#adm_erase_area {
+  position:absolute;
+  left: 800px;
+  color: #777;
+  visibility: hidden;
+}
+
+#adm_erase {
+  color: #c55;
+}
+
+#adm_en_area {
+  position:absolute;
+  left: 920px;
+  color: #aaa;
+}
+
+
+</style>
+
+<script src="/socket.io/socket.io.js"></script>
+
+
+<script language="javascript" type="text/javascript">
+
+var sys = {
+//socket_enable: false,  //@@@ standalone mode
+  socket_enable: true,
+  x_min: 0,
+  y_min: 0,
+//skips: 0,
+  skips: 3,
+//alpha: 0.01,
+  alpha: 0.004,
+  shape_type: { random: 0, pen: 1, ball: 2, star: 3, box: 4, triangle: 5, heart: 6, panda: 7 },
+  star_delta: 4,
+};
+
+var stat = {
+  color: "blue",
+  hue: 0,
+  hue_delta: 10,
+  size: 5,
+  wave_size: 1,
+  wave_size_delta: 1,
+  shape: 1,
+  skip: 0,
+  mouse_down: false,
+  x0: 0,
+  y0: 0,
+  x1: 0,
+  y1: 0,
+  dbg_alpha: 1
+};
+
+var socket;
+
+// main init
+function init() {
+  // offline aplication cache control
+  cache_control();
+
+  // hide top bar
+  setTimeout(function() {scrollTo(0, 0);}, 200);
+
+  // get canvas and resize
+  canvas = document.getElementById("canvas");
+  sys.x_max = canvas.width;
+  sys.y_max = canvas.height;
+  ctx = canvas.getContext("2d");
+
+  // event handler for pc
+  canvas.addEventListener("mousedown", handler_mousedown, false);
+  document.addEventListener("mousemove", handler_mousemove, false);
+  document.addEventListener("mouseup", handler_mouseup, false);
+
+  // event handler for smart device
+  canvas.addEventListener("touchstart", handler_touchstart, false);
+  document.addEventListener("touchmove", handler_touchmove, false);
+  document.addEventListener("touchend", handler_touchend, false);
+
+
+  // socket io
+  if ( sys.socket_enable ) {
+//  socket = io.connect('http://192.168.2.100:3001/social_drawing');
+    socket = io.connect('http://localhost:3001/social_drawing');
+    socket.on('change_con_num_s2c', function(data) { change_con_num(data); }); 
+    socket.on('draw_init_s2c', function(data) { draw_init(data); }); 
+    socket.on('draw_rq_s2c', function(data) { draw(data); }); 
+
+    socket.on('fade_rq_s2c', function(data) { fade_rq(data); }); 
+    socket.on('erase_rq_s2c', function(data) { erase_rq(data); }); 
+  } else {
+    document.getElementById("con_num").innerHTML = "standalone mode";
+  }
+}
+
+
+
+// websocket send interface
+function draw_rq_c2s() {
+  var data;
+
+  // color
+  var color;
+  if ( stat.color == "rainbow" ) {
+    color = "hsl(" + stat.hue + ", 100%, 50%)";
+    stat.hue = (stat.hue + stat.hue_delta ) % 360;
+  } else if ( stat.color == "random" ) {
+    stat.hue = Math.random() * 360;
+    color = "hsl(" + stat.hue + ", 100%, 50%)";
+  } else {
+    color = stat.color;
+  }
+
+  // size
+  var size;
+  if ( stat.size == "wave" ) {
+    size = stat.wave_size;
+    stat.wave_size += stat.wave_size_delta;
+    if ( stat.wave_size < 1 || stat.wave_size > 20 ) { stat.wave_size_delta *= -1 };
+  } else if ( stat.size == "random" ) {
+    size = Math.random() * 20;
+  } else {
+    size = stat.size;
+  }
+
+  // shape
+  var shape;
+  if ( stat.shape == sys.shape_type["random"] ) { 
+    shape = Math.floor(Math.random() * 5 +2);  // ball - heart
+  } else {
+    shape = stat.shape;
+  }
+
+  // send data
+  data = {color: color, size: size, shape: shape,
+          x0: stat.x0, y0: stat.y0, x1: stat.x1, y1: stat.y1};
+
+  if ( sys.socket_enable ) {
+//  console.log("socket.emit: objects.length = " + objects.length);
+    socket.emit('draw_rq_c2s', data);
+  } else {
+    dummy_socket_emit(data);
+  }
+}
+
+
+// server emulation (standalone mode)
+function dummy_socket_emit(data) {
+  dummy_server(data);
+}
+
+var OBJECTMAX = 300;
+var objects = new Array(OBJECTMAX);
+var dbg_rq_num = 0;
+function dummy_server(data) {
+  dbg_rq_num++;
+  objects.shift();
+  objects.push(data);
+//console.log("objects.length = " + objects.length + " : " + dbg_rq_);
+  draw(data);
+}
+
+
+// change connecting user number
+function change_con_num (con_num) {
+//console.log("con_num = " + con_num);
+  document.getElementById("con_num").innerHTML = Number(con_num);
+}
+
+
+// initialization draw
+function draw_init(obj) {
+  console.log("draw_init_rq");
+
+  rect(sys.x_min, sys.y_min, sys.x_max, sys.y_max, "#fff");
+
+  for (var i=0; i<obj.length; i++) {
+    if ( obj[i] ) {
+      draw(obj[i]);
+    }
+  }
+}
+
+
+// draw shape
+function draw(data) {
+//console.log("draw_rq: objects.length = " + objects.length);
+
+  // fadeout
+  ctx.globalCompositeOperation = "lighter";
+  ctx.fillStyle = "rgba(255, 255, 255," + sys.alpha * stat.dbg_alpha +")";
+  ctx.fillRect(sys.x_min, sys.y_min, sys.x_max, sys.y_max);
+  ctx.globalCompositeOperation = "source-over";
+
+  // draw shape
+  if ( data.shape == sys.shape_type["pen"] ) { 
+    line(data.x0, data.y0, data.x1, data.y1, data.size, data.color);
+
+  } else if ( data.shape == sys.shape_type["ball"] ) { 
+    ball(data.x1, data.y1, data.size+2, data.color);
+
+  } else if ( data.shape == sys.shape_type["star"] ) { 
+    star(data.x1, data.y1, data.size+2, data.color);
+
+  } else if ( data.shape == sys.shape_type["box"] ) {
+    box(data.x1, data.y1, data.size+2, data.color);
+
+  } else if ( data.shape == sys.shape_type["triangle"] ) { 
+    triangle(data.x1, data.y1, data.size+2, data.color);
+
+  } else if ( data.shape == sys.shape_type["heart"] ) { 
+    heart(data.x1, data.y1, data.size+2, data.color);
+
+  } else if ( data.shape == sys.shape_type["panda"] ) { 
+    panda(data.x1, data.y1, data.size+2, data.color);
+  }
+
+}
+
+
+// shapes
+function line(x0, y0, x1, y1, w, color) {
+  ctx.beginPath();
+  ctx.lineCap = "round";
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.lineWidth = w;
+  ctx.strokeStyle = color
+  ctx.stroke();
+}
+
+function ball(x, y, r, color) {
+  circle(x, y, r, color);
+}
+
+function star(x0, y0, r, color) {
+    var i;
+    var x, y, length;
+    var degree, degree_offset;
+
+    // calc degree offset
+    degree_offset = -(2 * Math.PI) / 4;
+
+    // star lines
+    ctx.beginPath();
+    for (var i=0; i<=10; i++) {
+        if ( i%2 == 0 ) { length = r * 0.4; } else { length = r; }
+        degree = (i + degree_offset) / 10 * (2 * Math.PI);
+        x = x0 + length * Math.cos(degree);
+        y = y0 + length * Math.sin(degree);
+        if ( i==0 ) { ctx.moveTo(x, y); }
+        else { ctx.lineTo(x, y); }
+    }
+
+    ctx.fillStyle = color;
+    ctx.fill();
+}
+
+function box(x, y, size, color) {
+  var x0, y0, w, h;
+  x0 = x - size;
+  y0 = y - size;
+  w = size*2;
+  h = size*2;
+  rect(x0, y0, w, h, color);
+}
+
+function triangle(x, y, size, color) {
+  ctx.beginPath();
+  ctx.moveTo(x-size, y+size*0.86);
+  ctx.lineTo(x+size, y+size*0.86);
+  ctx.lineTo(x, y-size*0.86);
+  ctx.lineTo(x-size, y+size*0.86);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function heart(x, y, size, color) {
+  ctx.beginPath();
+  ctx.moveTo(x, y+size*1.0);
+  ctx.bezierCurveTo(x-size*0.5, y+size*0.6,  x-size*1.0, y+size*0.4,  x-size*1.0, y);
+  ctx.bezierCurveTo(x-size*1.0, y-size*0.6,  x-size*0.2, y-size*0.8,  x, y-size*0.1);
+  ctx.bezierCurveTo(x+size*0.2, y-size*0.8,  x+size*1.0, y-size*0.6,  x+size*1.0, y);
+  ctx.bezierCurveTo(x+size*1.0, y+size*0.4,  x+size*0.5, y+size*0.6,  x, y+size*1.0);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function panda(x, y, r, color) {
+  circle(x-r*0.6, y-r*0.9, r*0.5, color)
+  circle(x+r*0.6, y-r*0.9, r*0.5, color)
+  circle(x, y, r, "#fff")
+
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, 2 * Math.PI, true);
+  ctx.lineWidth = r*0.05;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(x, y+r*0.5, r*0.5, 0, 2 * Math.PI, true);
+  ctx.lineWidth = r*0.05;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+
+  circle(x, y+r*0.2, r*0.2, color)
+  circle(x-r*0.45, y-r*0.3, r*0.4, color)
+  circle(x-r*0.2, y-r*0.25, r*0.15, "#fff")
+  circle(x+r*0.45, y-r*0.3, r*0.4, color)
+  circle(x+r*0.2, y-r*0.25, r*0.15, "#fff")
+}
+
+
+// premitive
+function rect(x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, w, h);
+}
+
+function circle(x, y, r, color) {
+  ctx.beginPath();
+  ctx.arc(x | 0, y | 0, r | 0, 0, 2 * Math.PI, true);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+
+// mouse and touch event handlers
+function handler_down(x, y) {
+  stat.x0 = x;
+  stat.y0 = y;
+  stat.x1 = stat.x0;
+  stat.y1 = stat.y0;
+
+  draw_rq_c2s();
+  stat.mouse_down = true;
+}
+
+function handler_move(x, y) {
+  if ( !stat.mouse_down ) { return; }
+
+  stat.x1 = x;
+  stat.y1 = y;
+
+  if ( stat.skip < sys.skips ) {
+    stat.skip++;
+  } else {
+    draw_rq_c2s();
+    stat.x0 = stat.x1;
+    stat.y0 = stat.y1;
+    stat.skip = 0;
+
+    if ( stat.x1 > sys.x_max || stat.x1 < sys.x_min ||
+         stat.y1 > sys.y_max || stat.y1 < sys.y_min ) {
+      stat.mouse_down = false;
+    }
+  }
+}
+
+function handler_up(e) {
+  stat.mouse_down = false;
+}
+
+
+function handler_mousedown(e) {
+  var x = e.clientX;
+  var y = e.clientY;
+  handler_down(x, y)
+  e.preventDefault();
+}
+
+function handler_mousemove(e) {
+  var x = e.clientX;
+  var y = e.clientY;
+  handler_move(x, y)
+}
+
+function handler_mouseup(e) {
+  handler_up()
+}
+
+function handler_touchstart(e) {
+  if(e.touches[0]) {
+    var x = e.touches[0].clientX;
+    var y = e.touches[0].clientY;
+    handler_down(x,y)
+  }
+  e.preventDefault();
+}
+
+function handler_touchmove(e) {
+  if(e.touches[0]) {
+    var x = e.touches[0].clientX;
+    var y = e.touches[0].clientY;
+    handler_move(x, y)
+  }
+//e.preventDefault();
+}
+
+function handler_touchend(e) {
+  handler_up()
+//e.preventDefault();
+}
+
+
+// form interface
+function change_color () {
+  var index = document.getElementById("sel_color").selectedIndex;
+  var color = document.getElementById("sel_color").options[index].value;
+  stat.color = color;
+}
+
+function change_size () {
+  var index = document.getElementById("sel_size").selectedIndex;
+  var size = document.getElementById("sel_size").options[index].value;
+
+  if ( size == "wave" || size == "random" ) {
+    stat.size = size;
+  } else {
+    stat.size = Number(size);
+  }
+
+}
+
+function change_shape () {
+  var index = document.getElementById("sel_shape").selectedIndex;
+  var shape = document.getElementById("sel_shape").options[index].value;
+  stat.shape = shape;
+}
+
+
+// debug utilities
+function dbg_change_con_num () {
+  var con_num = document.getElementById("dbg_con_num").value;
+  change_con_num(con_num);
+  console.log("num = " + con_num);
+}
+
+function dbg_change_init () {
+  num = 0;
+  console.log("init req");
+  draw_init(objects);
+}
+
+
+function change_adm_en () {
+  var checked = document.getElementById("adm_en").checked;
+//console.log("checkd = " + checked);
+  if ( checked ) {
+//  document.getElementById("adm_erase").disabled = false;
+//  document.getElementById("sel_adm_fade").disabled = false;
+    document.getElementById("adm_erase_area").style.visibility = "visible";
+    document.getElementById("adm_fade_area").style.visibility = "visible";
+  } else {
+//  document.getElementById("adm_erase").disabled = true;
+//  document.getElementById("sel_adm_fade").disabled = true;
+    document.getElementById("adm_erase_area").style.visibility = "hidden";
+    document.getElementById("adm_fade_area").style.visibility = "hidden";
+  }
+}
+
+function change_adm_erase () {
+  num = 0;
+  console.log("init req");
+
+  if ( sys.socket_enable ) {
+    socket.emit('erase_rq_c2s', "init_req");
+  } else {
+    console.log("reset req");
+    objects = new Array(OBJECTMAX);
+    dbg_rq_num = 0;
+    rect(sys.x_min, sys.y_min, sys.x_max, sys.y_max, "#fff");
+  }
+}
+
+function erase_rq(data) {
+  console.log("erase req");
+  draw_init(data)
+}
+
+
+function change_adm_fade () {
+  var index = document.getElementById("sel_adm_fade").selectedIndex;
+  var fade = document.getElementById("sel_adm_fade").options[index].value;
+
+  var data = {index: index, fade: Number(fade)};
+  if ( sys.socket_enable ) {
+    socket.emit('fade_rq_c2s', data);
+  } else {
+    fade_rq(data);
+  }
+}
+
+function fade_rq(data) {
+  document.getElementById("sel_adm_fade").selectedIndex = data.index;
+  stat.dbg_alpha = data.fade;
+}
+
+
+// cache control
+function cache_control() {
+  var cache = window.applicationCache;
+  if(cache) {
+    cache.addEventListener("updateready", function() {
+      try { cache.swapCache(); } catch(e) {}
+      window.location.reload();
+    });
+    if(window.navigator.onLine && cache.status != 0) {
+      try { cache.update(); } catch(e) {}
+    }
+  }
+}
+
+</script>
+
+
+
+<body onload="init()">
+
+<canvas id="canvas" width="1000" height="500"></canvas><br>
+
+<div id="control_area">
+  color:
+  <span id="color_area">
+    <select id="sel_color" onchange="change_color()">
+      <option value="red"> red </option>
+      <option value="brown"> brown </option>
+      <option value="hotpink"> hotpink </option>
+      <option value="orange"> orange </option>
+      <option value="yellow"> yellow </option>
+      <option value="lime"> lime </option>
+      <option value="green"> green </option>
+      <option value="skyblue"> skyblue </option>
+      <option value="aqua"> aqua </option>
+      <option value="blue" selected> blue </option>
+      <option value="purple"> purple </option>
+      <option value="" disabled> ---------- </option>
+      <option value="black"> black </option>
+      <option value="gray"> gray </option>
+      <option value="white"> white </option>
+      <option value="" disabled> ---------- </option>
+      <option value="rainbow"> rainbow </option>
+      <option value="random"> random </option>
+    </select>
+  </span>
+
+  size:
+  <span id="size_area">
+    <select id="sel_size" onchange="change_size()">
+      <option value="1"> small </option>
+      <option value="5" selected> medium </option>
+      <option value="10"> large </option>
+      <option value="20"> mega </option>
+      <option value="170"> giga </option>
+      <option value="" disabled> ---------- </option>
+      <option value="wave"> wave </option>
+      <option value="random"> random </option>
+    </select>
+  </span>
+
+  shape:
+  <span id="shape_area">
+    <select id="sel_shape" onchange="change_shape()">
+      <option value="1" selected> pen </option>
+      <option value="2"> ball </option>
+      <option value="3"> star </option>
+      <option value="4"> box </option>
+      <option value="5"> triangle </option>
+      <option value="6"> heart </option>
+      <option value="7"> panda </option>
+      <option value="" disabled> ---------- </option>
+      <option value="0"> random </option>
+    </select>
+  </span>
+
+</div>
+
+<div id="connection_area">
+  <span id="pub_area">public room: #1</span>
+  <span id="con_area">connecting users: </span><span id="con_num">0</span>
+
+  <span id="adm_fade_area">
+    <!-- select id="sel_adm_fade" onchange="change_adm_fade()" disabled -->
+    <select id="sel_adm_fade" onchange="change_adm_fade()">
+      <option value="9"> very fast fade </option>
+      <option value="3"> fast fade </option>
+      <option value="1" selected> normal fade </option>
+      <option value="0.983"> slow fade </option>
+      <option value="0.980"> very slow fade </option>
+      <option value="" disabled> ------- </option>
+      <option value="0"> keep 900 </option>
+    </select>
+  </span>
+
+  <span id="adm_erase_area">
+    <!-- input id="adm_erase" type="button" value="full erase" disabled onclick="change_adm_erase()"/ -->
+    <input id="adm_erase" type="button" value="full erase" onclick="change_adm_erase()"/>
+  </span>
+
+  <span id="adm_en_area">
+    <!-- input type="checkbox" id="adm_en" checked onchange="change_adm_en()" --> 
+    <input type="checkbox" id="adm_en" onchange="change_adm_en()"> admin 
+  </span>
+</div>
+
+<div id="social_draw_area">
+social drawing
+</div>
+
+<div class="debug">
+  <span>
+    debug connecting num
+    <input id="dbg_con_num"  onchange="dbg_change_con_num()"/>
+  </span>
+  <span>
+    <input id="dbg_init" type="button" value="dbg_init" onclick="dbg_change_init()">
+  </span>
+</div>
+
+</body>
+</html>
+
+
